@@ -1,33 +1,103 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
-var baseURL string = "https://www.saramin.co.kr/zf_user/search/recruit?&searchword="
+type extractedJob struct {
+	id       string
+	title    string
+	location string
+	// salary   string // salary가 있는 것도 없는 것도 존재. 위치가 비정규적
+}
+
+//3:30
+var baseURL string = "https://www.saramin.co.kr/zf_user/search/recruit?&searchword=python"
 
 func main() {
-	pages := getPages()
+	var jobs []extractedJob
+	totalPages := getPages()
+	// fmt.Println(totalPages)
+	for i := 0; i < totalPages; i++ {
+		extractedJobs := getPage(i)
+		// extractedJobs... 는 extractedJobs의 content를 가져온다는 의미?
+    //slice 크기가 정해지지 않은 배열
+		jobs = append(jobs, extractedJobs...)
+	}
+	fmt.Println(jobs)
 }
-
+func getPage(page int) []extractedJob {
+	var jobs []extractedJob
+	pageURL := baseURL + "&recruitPage=" + strconv.Itoa((page))
+	fmt.Println("Requesting", pageURL)
+	res, err := http.Get(pageURL)
+	checkErr(err)
+	checkCode(res)
+	defer res.Body.Close()
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	checkErr(err)
+	searchCards := doc.Find(".item_recruit")
+	searchCards.Each(func(i int, card *goquery.Selection) {
+		job := extractJob(card)
+		jobs = append(jobs, job)
+	})
+	return jobs
+}
 func getPages() int {
+	pages := 0
 	res, err := http.Get(baseURL)
-	return 0
+	checkErr(err)
+	checkCode(res)
+
+	//res.Body는 byte인데, 입력과 출력 IO라고 한다... c#의 streamreader같은 거 같다.
+	//따라서 닫아줄 필요가 있다.
+	defer res.Body.Close()
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	checkErr(err)
+
+	// fmt.Println(doc)
+	//.pagintion이 하나라서 Each를 써도 문제가 없는 건가보다
+	doc.Find(".pagination").Each(func(i int, s *goquery.Selection) {
+		// fmt.Println(s.Find("a").Length())
+		pages = s.Find("a").Length()
+	})
+	return pages
 }
 
-// youjinlee19979 months ago
-// 2022.10.24 기준으로 영상 속 사이트는 크롤링이 불가능합니다.
-// 그래서 저는 일단 사람인으로 대체해서 진행했어요!
+func extractJob(card *goquery.Selection) extractedJob {
+	id, _ := card.Attr("value")
+	// fmt.Println(id)
+	title := cleanString(card.Find(".area_job>.job_tit>a>span").Text())
+	// fmt.Println(title)
+	location := cleanString(card.Find(".area_job>.job_condition>span>a").Text())
+	// fmt.Println(location)
+	// fmt.Println(id, title, location)
+	return extractedJob{id: id,
+		title:    title,
+		location: location}
+}
 
-// 크롤링 주소는 https://www.saramin.co.kr/zf_user/search/recruit?&searchword=python 이구요,
+func cleanString(str string) string {
+	//Fields는 문자열을 분리시킨다.
+	//stringTokenizer와 같은 것?
+	//TrimSpace로 양쪽 끝에서의 공백을 제거
+	//Join은 배열을 separater을 상요해 합친다.
+	return strings.Join(strings.Fields(strings.TrimSpace(str)), " ")
+}
 
-// id, title, location을 찾을 때는 아래와 같은 코드를 사용했습니다.
-// title := cleanString(card.Find(".area_job>.job_tit>a").Text())
-// location := cleanString(card.Find(".area_job>.job_condition>span>a").Text())
-
-// summary와 연봉정보는 메인에 안나와서 별도로 하진 않았지만, 강의 듣는데는 큰 문제 없습니다.
-// 우선은 3.7강 까지 학습하는데는 큰 문제 없는걸로 확인했습니다.
-
-// 재밌는 강의 만들어주신 니꼬쌤 감사하고, 강의 들으시는 분들도 화이팅입니다!
-
-//감사합니다!
+func checkErr(err error) {
+	if err != nil {
+		log.Fatalln(err)
+	}
+}
+func checkCode(res *http.Response) {
+	if res.StatusCode != 200 {
+		log.Fatalln("Request failed with Statuis: ", res.StatusCode)
+	}
+}
