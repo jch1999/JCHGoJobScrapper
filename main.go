@@ -1,169 +1,41 @@
 package main
 
 import (
-	// "encoding/csv"
-	"fmt"
-	"log"
-	"net/http"
-	// "os"
-	"github.com/tsak/concurrent-csv-writer"
-	"strconv"
+	// "net/http"
+
+	// "fmt"
+	"os"
 	"strings"
 
-	"github.com/PuerkitoBio/goquery"
+	"main/scrapper"
+
+	"github.com/labstack/echo"
 )
 
-type extractedJob struct {
-	id       string
-	title    string
-	location string
-	// salary   string // salary가 있는 것도 없는 것도 존재.
+const fileNAME string = "jobs.csv"
+
+//go echo go 언어 기반의 서버를 만들어주는 패키지?
+
+// echo handler
+func handleHome(c echo.Context) error {
+	return c.File("home.html")
 }
 
-var baseURL string = "https://www.saramin.co.kr/zf_user/search/recruit?&searchword=python"
-
+func handleScrape(c echo.Context) error {
+	//요청이 다를 수 있으므로 서버에 파일을 남겨놓는 것은 좋지 못하니 삭제
+	defer os.Remove(fileNAME)
+	// fmt.Println(c.FormValue("term"))
+	term := strings.ToLower(scrapper.CleanString(c.FormValue("term")))
+	scrapper.Scrape(term)
+	//Attachment() 첨부파일을 리턴
+	return c.Attachment(fileNAME, "job.csv")
+}
 func main() {
-	var jobs []extractedJob
-	totalPages := getPages()
-
-	mainChannel := make(chan []extractedJob)
-	for i := 0; i < totalPages; i++ {
-		// extractedJobs := getPage(i)
-		go getPage(i, mainChannel)
-		// extractedJobs... 는 extractedJobs의 content를 가져온다는 의미?
-		//배열을 추가하는게 아닌 배열의 내용물을 추가하기 위해 배열... 사용
-		// jobs = append(jobs, extractedJobs...)
-	}
-	for i := 0; i < totalPages; i++ {
-		extractedJobs := <-mainChannel
-		jobs = append(jobs, extractedJobs...)
-	}
-	// fmt.Println(jobs)
-	// writeJobs(jobs)
-	writeJobsRoutine(jobs)
-	fmt.Println("Done, extracted ", len(jobs))
-}
-
-func getPage(page int, mainChannel chan []extractedJob) {
-	var jobs []extractedJob
-	c := make(chan extractedJob)
-	pageURL := baseURL + "&recruitPage=" + strconv.Itoa((page))
-	fmt.Println("Requesting", pageURL)
-	res, err := http.Get(pageURL)
-	checkErr(err)
-	checkCode(res)
-	defer res.Body.Close()
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	checkErr(err)
-	searchCards := doc.Find(".item_recruit")
-	searchCards.Each(func(i int, card *goquery.Selection) {
-		// job := extractJob(card, c)
-		// jobs = append(jobs, job)
-		go extractJob(card, c)
-	})
-	for i := 0; i < searchCards.Length(); i++ {
-		job := <-c
-		jobs = append(jobs, job)
-	}
-	mainChannel <- jobs
-}
-
-func getPages() int {
-	pages := 0
-	res, err := http.Get(baseURL)
-	checkErr(err)
-	checkCode(res)
-
-	//res.Body는 byte인데, 입력과 출력 IO라고 한다... c#의 streamreader같은 거 같다.
-	//따라서 닫아줄 필요가 있다.
-	defer res.Body.Close()
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	checkErr(err)
-
-	//.pagintion이 하나라서 Each를 써도 문제가 없는 건가보다
-	doc.Find(".pagination").Each(func(i int, s *goquery.Selection) {
-		// fmt.Println(s.Find("a").Length())
-		pages = s.Find("a").Length()
-	})
-	return pages
-}
-
-func extractJob(card *goquery.Selection, c chan<- extractedJob) {
-	id, _ := card.Attr("value")
-	title := cleanString(card.Find(".area_job>.job_tit>a>span").Text())
-	location := cleanString(card.Find(".area_job>.job_condition>span>a").Text())
-
-	// return extractedJob{id: id,
-	// 	title:    title,
-	// 	location: location}
-	c <- extractedJob{id: id,
-		title:    title,
-		location: location}
-}
-
-func cleanString(str string) string {
-	//Fields는 문자열을 분리시킨다.
-	//stringTokenizer와 같은 것?
-	//TrimSpace로 양쪽 끝에서의 공백을 제거
-	//Join은 배열을 separater을 사용해 합친다.
-	return strings.Join(strings.Fields(strings.TrimSpace(str)), " ")
-}
-
-func writeJobsRoutine(jobs []extractedJob) {
-	file, err := ccsv.NewCsvWriter("jobs.csv")
-	checkErr(err)
-
-	defer file.Close()
-
-	headers := []string{"ID", "Title", "Location"}
-
-	wErr := file.Write(headers)
-	checkErr(wErr)
-
-	done := make(chan bool)
-
-	for _, job := range jobs {
-		go func(job extractedJob) {
-			jwErr := file.Write([]string{"https://www.saramin.co.kr/zf_user/jobs/relay/view?isMypage=no&rec_idx=" + job.id, job.title, job.location})
-			checkErr(jwErr)
-			// fmt.Println("ah")
-			done <- true
-		}(job)
-	}
-
-	for i := 0; i < len(jobs); i++ {
-		<-done
-	}
-}
-
-// func writeJobs(jobs []extractedJob) {
-// 	file, err := os.Create("jobs.csv")
-// 	checkErr(err)
-
-// 	w := csv.NewWriter(file)
-// 	// Flush는 파일에 데이터를 입력하는 함수이다.
-// 	//defer은 함수가 끝나는 시점에 실행된다.
-// 	defer w.Flush()
-
-// 	headers := []string{"ID", "Title", "Location"}
-
-// 	wErr := w.Write(headers)
-// 	checkErr(wErr)
-
-// 	for _, job := range jobs {
-// 		jobSlice := []string{"https://www.saramin.co.kr/zf_user/jobs/relay/view?isMypage=no&rec_idx=" + job.id, job.title, job.location}
-// 		jwErr := w.Write(jobSlice)
-// 		checkErr(jwErr)
-// 	}
-// }
-
-func checkErr(err error) {
-	if err != nil {
-		log.Fatalln(err)
-	}
-}
-func checkCode(res *http.Response) {
-	if res.StatusCode != 200 {
-		log.Fatalln("Request failed with Statuis: ", res.StatusCode)
-	}
+	// Echo instance
+	e := echo.New()
+	//Set URL
+	e.GET("/", handleHome)
+	e.POST("/scrape", handleScrape)
+	e.Logger.Fatal(e.Start(":1323"))
+	// scrapper.Scrape("python")
 }
